@@ -2,8 +2,8 @@
 
 1. Клонируйте репозиторий:
     ```sh
-    git clone <repository-url>
-    cd <repository-directory>
+    git clone https://github.com/Froloveee3/bybit-hyperliquid-spreads.git
+    cd bybit-hyperliquid-spreads
     ```
 
 2. Установите зависимости:
