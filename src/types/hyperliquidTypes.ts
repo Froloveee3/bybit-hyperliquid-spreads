@@ -1,6 +1,6 @@
 export interface HyperliquidSymbol {
   symbol: string;
-  fundingRate: number;
+  fundingRate: number | null;
   bestBid: number | null;
   bestAsk: number | null;
   midPrice: number | null;

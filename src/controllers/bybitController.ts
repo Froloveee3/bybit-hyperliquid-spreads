@@ -1,129 +1,93 @@
-import {
-  getBybitFundingRates,
-  getBybitOrderBook,
-} from '../services/bybitService';
+import { getBybitPerpetuals } from '../services/bybitService';
+import { bybitWSrestart, bybitWSsubscribe, bybitWSunsubscribe } from '../services/bybitWS';
 import logger from '../logger';
-import { getOrderBookInfo, calculateVWAP } from '../utils/calculations';
 import { BybitSymbol } from '../types/bybitTypes';
-import cliProgress from 'cli-progress';
 
 export class BybitController {
   private symbols: Map<string, BybitSymbol>;
+  private orderBookDepth: number = 500;
 
   constructor() {
     this.symbols = new Map();
   }
 
   /**
-   * Получение данных по торговым парам с Bybit
+   * Инициализация WebSocket и подписка на обновления по всем валютным парам.
    */
-  async fetchPairsData(): Promise<void> {
-    logger.info('Bybit -> Начало обновления данных...');
+  async initializeWebSocketSubscriptions(): Promise<void> {
+    logger.info('Bybit -> Инициализация WebSocket и подписка на топики...');
 
     try {
-      const { bybitSymbols, bybitFundingRates } = await getBybitFundingRates();
+      bybitWSrestart();
 
-      for (const symbol of bybitSymbols) {
-        const fundingRate = bybitFundingRates[symbol]?.fundingRate ?? 0;
+      setTimeout(async () => {
+        const bybitPerpetuals = await getBybitPerpetuals();
+        const topics: string[] = [];
 
-        this.symbols.set(symbol, {
-          symbol: symbol,
-          fundingRate,
-          bestBid: null,
-          bestAsk: null,
-          midPrice: null,
-          orderBook: null,
-          VWAP: null,
-        });
-      }
+        for (const symbol of bybitPerpetuals) {
+          if (!symbol.includes('USDT')) continue;
 
-      await this.updateSymbolData();
-      logger.info('Bybit -> Данные успешно обновлены!');
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? `${error.message}\n${error.stack}`
-          : `${error}`;
-      logger.error(`Bybit -> Ошибка при обновлении данных: ${errorMessage}`);
-      throw new Error(`Bybit -> Обновление данных не удалось: ${errorMessage}`);
+          const formattedSymbol = symbol.split(':')[0].replace('/', '');
+
+          this.symbols.set(formattedSymbol, {
+            symbol: formattedSymbol,
+            fundingRate: null,
+            bestBid: null,
+            bestAsk: null,
+            midPrice: null,
+            orderBook: null,
+            VWAP: null,
+          });
+
+          topics.push(`tickers.${formattedSymbol}`);
+          topics.push(`orderbook.${this.orderBookDepth}.${formattedSymbol}`);
+        }
+
+        bybitWSsubscribe(topics);
+
+        logger.info('Bybit -> Подписка на все символы завершена.');
+      }, 2000);
+    } catch (error) {
+      logger.error(`Bybit -> Ошибка при подписке на WebSocket: ${error}`);
+      throw new Error(`Bybit -> Подписка на WebSocket не удалась: ${error}`);
     }
   }
 
   /**
-   * Обновление ордербуков для всех торговых пар
+   * Обновление данных по символу
+   * @param symbol - Символ торговой пары
+   * @param data - Данные для обновления
    */
-  private async updateSymbolData(): Promise<void> {
-    try {
-      const symbols = Array.from(this.symbols.keys());
+  updateSymbolData(symbol: string, data: Partial<BybitSymbol>): void {
+    const existingSymbol = this.symbols.get(symbol);
 
-      const progressBar = new cliProgress.SingleBar(
-        {
-          format:
-            'Bybit -> Обновление ордербука | {bar} | {percentage}% | {value}/{total} пар',
-          barCompleteChar: '\u2588',
-          barIncompleteChar: '\u2591',
-          hideCursor: true,
-        },
-        cliProgress.Presets.shades_classic
-      );
-
-      progressBar.start(symbols.length, 0);
-
-      const promises = symbols.map((symbol) =>
-        (async () => {
-          try {
-            const orderBook = await getBybitOrderBook(symbol);
-            if (!orderBook) {
-              throw new Error(`Ордербук для ${symbol} не получен или пуст`);
-            }
-
-            const orderBookInfo = getOrderBookInfo(orderBook);
-            const VWAPInfo = calculateVWAP(orderBook);
-
-            if (!orderBookInfo || !VWAPInfo) {
-              throw new Error(
-                `Недостаточно данных для расчета VWAP или Mid Price для ${symbol}`
-              );
-            }
-
-            const { bestBid, bestAsk, midPrice } = orderBookInfo;
-            const { VWAP } = VWAPInfo;
-
-            const updatedSymbol = this.symbols.get(symbol);
-            if (updatedSymbol) {
-              updatedSymbol.bestBid = bestBid;
-              updatedSymbol.bestAsk = bestAsk;
-              updatedSymbol.midPrice = midPrice;
-              updatedSymbol.orderBook = orderBook;
-              updatedSymbol.VWAP = VWAP;
-            }
-
-            progressBar.update(symbols.indexOf(symbol) + 1);
-          } catch (error: unknown) {
-            const errorMessage =
-              error instanceof Error
-                ? `${error.message}\n${error.stack}`
-                : `${error}`;
-            logger.error(
-              `Ошибка при обновлении ордербука для пары ${symbol}: ${errorMessage}`
-            );
-          }
-        })()
-      );
-
-      await Promise.allSettled(promises);
-
-      progressBar.stop();
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error
-          ? `${error.message}\n${error.stack}`
-          : `${error}`;
-      logger.error(
-        `Bybit -> Ошибка при обновлении ордербуков: ${errorMessage}`
-      );
-      throw new Error(`Bybit -> Ошибка обновления ордербуков: ${errorMessage}`);
+    if (existingSymbol) {
+      this.symbols.set(symbol, { ...existingSymbol, ...data });
     }
+  }
+
+  /**
+   * Отписка от топиков по символу
+   * @param symbol - Символ для отписки
+   */
+  unsubscribeSymbol(symbol: string): void {
+    const tickerTopic = `tickers.${symbol}`;
+    const orderbookTopic = `orderbook.${this.orderBookDepth}.${symbol}`;
+
+    bybitWSunsubscribe([tickerTopic, orderbookTopic]);
+    logger.info(`Bybit -> Отписка от топиков: ${tickerTopic}, ${orderbookTopic}`);
+  }
+
+  /**
+   * Подписка на новый символ
+   * @param symbol - Символ для подписки
+   */
+  subscribeSymbol(symbol: string): void {
+    const tickerTopic = `tickers.${symbol}`;
+    const orderbookTopic = `orderbook.${this.orderBookDepth}.${symbol}`;
+
+    bybitWSsubscribe([tickerTopic, orderbookTopic]);
+    logger.info(`Bybit -> Подписка на символ: ${tickerTopic}, ${orderbookTopic}`);
   }
 
   /**
@@ -135,11 +99,24 @@ export class BybitController {
   }
 
   /**
-   * Получение данных символа по названию
+   * Получение данных по символу
    * @param symbol - Название торговой пары
    * @returns Данные по символу или undefined
    */
   getSymbol(symbol: string): BybitSymbol | undefined {
     return this.symbols.get(symbol);
+  }
+
+  /**
+   * Отписка от всех символов
+   */
+  unsubscribeAllSymbols(): void {
+    const topics = Array.from(this.symbols.keys()).flatMap((symbol) => [
+      `tickers.${symbol}`,
+      `orderbook.${this.orderBookDepth}.${symbol}`,
+    ]);
+
+    bybitWSunsubscribe(topics);
+    logger.info('Bybit -> Отписка от всех топиков завершена.');
   }
 }

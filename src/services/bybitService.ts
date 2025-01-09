@@ -1,5 +1,4 @@
-import ccxt, { OrderBook as BybitOrderBook } from 'ccxt';
-import { BybitFundingRates } from '../types/bybitTypes';
+import ccxt from 'ccxt';
 import logger from '../logger';
 
 /**
@@ -12,53 +11,17 @@ const bybit = new ccxt.bybit({
 });
 
 /**
- * Получение ставок финансирования (Funding Rates) Bybit
- * @returns Объект с массивом символов и ставками финансирования
+ * Получение списка perpetuals Bybit
+ * @returns {Promise<string[]>}
  */
-export async function getBybitFundingRates(): Promise<BybitFundingRates> {
+export async function getBybitPerpetuals(): Promise<string[]> {
   try {
-    const fundingRates = await bybit.fetchFundingRates();
+    const perpetualsRates = await bybit.fetchFundingRates();
 
-    return {
-      bybitSymbols: Object.keys(fundingRates),
-      bybitFundingRates: fundingRates,
-    };
+    return Object.keys(perpetualsRates);
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(
-      `Ошибка при получении ставок финансирования Bybit: ${errorMessage}`
-    );
-    throw new Error(
-      `Ошибка при получении ставок финансирования Bybit: ${errorMessage}`
-    );
-  }
-}
-
-/**
- * Получение ордербука для символа Bybit
- * @param symbol - Торговый символ (например, BTC/USDT:USDT)
- * @param limit - Лимит глубины ордербука
- * @returns Ордербук с уровнями заявок на покупку и продажу
- */
-export async function getBybitOrderBook(
-  symbol: string,
-  limit: number = 3
-): Promise<BybitOrderBook> {
-  try {
-    const orderBook = await bybit.fetchOrderBook(symbol, limit);
-
-    if (!orderBook || (!orderBook.bids.length && !orderBook.asks.length)) {
-      throw new Error(`Ордербук для символа ${symbol} пуст или недоступен`);
-    }
-
-    return orderBook;
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(
-      `Ошибка при получении ордербука Bybit для символа ${symbol}: ${errorMessage}`
-    );
-    throw new Error(
-      `Ошибка при получении ордербука Bybit для символа ${symbol}: ${errorMessage}`
-    );
+    logger.error(`Ошибка при получении perpetuals Bybit: ${errorMessage}`);
+    throw new Error(`Ошибка при получении perpetuals Bybit: ${errorMessage}`);
   }
 }

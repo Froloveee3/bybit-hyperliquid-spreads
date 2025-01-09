@@ -4,9 +4,15 @@ import { HyperliquidController } from './hyperliquidController';
 import { BybitSymbol } from '../types/bybitTypes';
 import { HyperliquidSymbol } from '../types/hyperliquidTypes';
 
+interface SymbolPair {
+  bybit: BybitSymbol | null;
+  hyperliquid: HyperliquidSymbol | null;
+}
+
 export class SpreadCalculatorController {
   private bybitController: BybitController;
   private hyperliquidController: HyperliquidController;
+  private symbolLinks: Map<string, SymbolPair>;
 
   constructor(
     bybitController: BybitController,
@@ -14,121 +20,35 @@ export class SpreadCalculatorController {
   ) {
     this.bybitController = bybitController;
     this.hyperliquidController = hyperliquidController;
+    this.symbolLinks = new Map();
+
+    this.initializeSymbolLinks();
+    this.subscribeToUpdates();
   }
 
   /**
-   * Форматирование чисел для отображения с динамической точностью
+   * Инициализация связок символов с обеих бирж
    */
-  formatNumber(value: number | null): string {
-    if (value === null || isNaN(value)) {
-      return 'N/A';
-    }
-
-    const absValue = Math.abs(value);
-
-    if (absValue < 0.001) return value.toFixed(8);
-    if (absValue < 0.1) return value.toFixed(6);
-    if (absValue < 1000) return value.toFixed(4);
-    return value.toFixed(2);
-  }
-
-  /**
-   * Вычисление процента спреда на основе цены
-   */
-  calculatePercentage(spread: number | null, basePrice: number | null): string {
-    if (spread === null || basePrice === null || basePrice === 0) {
-      return 'N/A';
-    }
-    const percentage = (spread / basePrice) * 100;
-    return `${this.formatNumber(percentage)}%`;
-  }
-
-  /**
-   * Расчет и логирование спредов между биржами
-   */
-  async calculateAndLogSpreads(): Promise<void> {
-    logger.info('--- Начало расчета спредов между биржами ---');
-
+  private initializeSymbolLinks(): void {
     const bybitSymbols = this.bybitController.getAllSymbols();
     const hyperliquidSymbols = this.hyperliquidController.getAllSymbols();
 
-    for (const bybitSymbol of bybitSymbols) {
+    logger.info('--- Инициализация связей символов начата ---');
+
+    bybitSymbols.forEach((bybitSymbol) => {
       const hyperliquidSymbol = this.findMatchingSymbol(
         bybitSymbol,
         hyperliquidSymbols
       );
+      this.symbolLinks.set(bybitSymbol.symbol, {
+        bybit: bybitSymbol,
+        hyperliquid: hyperliquidSymbol ?? null,
+      });
+    });
 
-      if (hyperliquidSymbol) {
-        const {
-          bestBid: bestBidBybit,
-          bestAsk: bestAskBybit,
-          midPrice: midPriceBybit,
-          VWAP: VWAPBybit,
-          fundingRate: fundingRateBybit,
-        } = bybitSymbol;
-
-        const {
-          bestBid: bestBidHyperliquid,
-          bestAsk: bestAskHyperliquid,
-          midPrice: midPriceHyperliquid,
-          VWAP: VWAPHyperliquid,
-          fundingRate: fundingRateHyperliquid,
-        } = hyperliquidSymbol;
-
-        const spreadBidAsk1 =
-          bestBidHyperliquid && bestAskBybit
-            ? bestAskBybit - bestBidHyperliquid
-            : null;
-        const spreadBidAsk2 =
-          bestBidBybit && bestAskHyperliquid
-            ? bestAskHyperliquid - bestBidBybit
-            : null;
-
-        const spreadBidAsk1Percentage = this.calculatePercentage(
-          spreadBidAsk1,
-          bestAskBybit
-        );
-        const spreadBidAsk2Percentage = this.calculatePercentage(
-          spreadBidAsk2,
-          bestAskHyperliquid
-        );
-
-        const fundingRateSpread = fundingRateBybit - fundingRateHyperliquid;
-
-        const midPriceSpread =
-          midPriceBybit && midPriceHyperliquid
-            ? midPriceBybit - midPriceHyperliquid
-            : null;
-        const vwapSpread =
-          VWAPBybit && VWAPHyperliquid ? VWAPBybit - VWAPHyperliquid : null;
-
-        const report = this.generateSpreadReport(
-          bybitSymbol.symbol,
-          midPriceBybit,
-          fundingRateBybit,
-          midPriceHyperliquid,
-          fundingRateHyperliquid,
-          VWAPBybit,
-          VWAPHyperliquid,
-          spreadBidAsk1,
-          spreadBidAsk1Percentage,
-          spreadBidAsk2,
-          spreadBidAsk2Percentage,
-          vwapSpread,
-          fundingRateSpread
-        );
-
-        console.log(report);
-        logger.info(report);
-      }
-    }
-
-    logger.info('--- Расчет спредов между биржами завершен ---');
+    logger.info('--- Инициализация связей символов завершена ---');
   }
 
-  /**
-   * Нахождение соответствующего символа Hyperliquid для Bybit
-   */
   private findMatchingSymbol(
     bybitSymbol: BybitSymbol,
     hyperliquidSymbols: HyperliquidSymbol[]
@@ -143,22 +63,121 @@ export class SpreadCalculatorController {
   }
 
   /**
+   * Подписка на изменения данных
+   */
+  private subscribeToUpdates(): void {
+    this.bybitController.updateSymbolData = (symbol, data) => {
+      const currentPair = this.symbolLinks.get(symbol);
+      if (currentPair) {
+        currentPair.bybit = { ...currentPair.bybit, ...data } as BybitSymbol;
+        this.calculateAndLogSpread(symbol);
+      }
+    };
+
+    this.hyperliquidController.updateSymbolData = (symbol, data) => {
+      const currentPair = this.symbolLinks.get(symbol);
+      if (currentPair) {
+        currentPair.hyperliquid = {
+          ...currentPair.hyperliquid,
+          ...data,
+        } as HyperliquidSymbol;
+        this.calculateAndLogSpread(symbol);
+      }
+    };
+  }
+
+  /**
+   * Вычисление спреда между биржами и логирование результата
+   * @param symbol - Название валютной пары
+   */
+  private calculateAndLogSpread(symbol: string): void {
+    const symbolPair = this.symbolLinks.get(symbol);
+
+    if (!symbolPair || !symbolPair.bybit || !symbolPair.hyperliquid) return;
+
+    const {
+      bestAsk: bestAskBybit,
+      bestBid: bestBidBybit,
+      VWAP: VWAPBybit,
+      fundingRate: fundingRateBybit,
+    } = symbolPair.bybit;
+
+    const {
+      bestAsk: bestAskHyperliquid,
+      bestBid: bestBidHyperliquid,
+      VWAP: VWAPHyperliquid,
+      fundingRate: fundingRateHyperliquid,
+    } = symbolPair.hyperliquid;
+
+    const spreadBBA =
+      bestAskBybit && bestBidHyperliquid
+        ? bestAskBybit - bestBidHyperliquid
+        : null;
+    const spreadBBAPercentage =
+      spreadBBA && bestBidHyperliquid
+        ? `${this.formatNumber((spreadBBA / bestBidHyperliquid) * 100)}%`
+        : 'N/A';
+
+    const fundingRateSpread =
+      fundingRateBybit && fundingRateHyperliquid
+        ? fundingRateBybit - fundingRateHyperliquid
+        : null;
+
+    const vwapSpread =
+      VWAPBybit && VWAPHyperliquid ? VWAPBybit - VWAPHyperliquid : null;
+
+    const vwapSpreadPercentage =
+      vwapSpread && VWAPHyperliquid
+        ? `${this.formatNumber((vwapSpread / VWAPHyperliquid) * 100)}%`
+        : 'N/A';
+
+    const report = this.generateSpreadReport(
+      symbol,
+      bestBidHyperliquid,
+      bestAskBybit,
+      spreadBBA,
+      spreadBBAPercentage,
+      VWAPHyperliquid,
+      VWAPBybit,
+      vwapSpread,
+      vwapSpreadPercentage,
+      fundingRateSpread
+    );
+
+    console.log(report);
+    logger.info(report);
+  }
+
+  /**
+   * Форматирование чисел для отображения с динамической точностью
+   */
+  private formatNumber(value: number | null): string {
+    if (value === null || isNaN(value)) {
+      return 'N/A';
+    }
+
+    const absValue = Math.abs(value);
+
+    if (absValue < 0.001) return value.toFixed(8);
+    if (absValue < 0.1) return value.toFixed(6);
+    if (absValue < 1000) return value.toFixed(4);
+    return value.toFixed(2);
+  }
+
+  /**
    * Генерация отчета по спреду
    */
   private generateSpreadReport(
     symbol: string,
-    midPriceBybit: number | null,
-    fundingRateBybit: number,
-    midPriceHyperliquid: number | null,
-    fundingRateHyperliquid: number,
-    VWAPBybit: number | null,
+    bestBidHyperliquid: number | null,
+    bestAskBybit: number | null,
+    spreadBBA: number | null,
+    spreadBBAPercentage: string,
     VWAPHyperliquid: number | null,
-    spreadBidAsk1: number | null,
-    spreadBidAsk1Percentage: string,
-    spreadBidAsk2: number | null,
-    spreadBidAsk2Percentage: string,
+    VWAPBybit: number | null,
     vwapSpread: number | null,
-    fundingRateSpread: number
+    vwapSpreadPercentage: string,
+    fundingRateSpread: number | null
   ): string {
     return `
 === ${symbol} Market Data ===
@@ -167,22 +186,25 @@ export class SpreadCalculatorController {
 ---------------------------------
 | Exchange    | Price (USDT) | Funding Rate (%) |
 |-------------|--------------|-----------------|
-| Hyperliquid | ${this.formatNumber(midPriceHyperliquid).padStart(12)} | ${(fundingRateHyperliquid * 100).toFixed(4).padStart(16)} |
-| Bybit       | ${this.formatNumber(midPriceBybit).padStart(12)} | ${(fundingRateBybit * 100).toFixed(4).padStart(16)} |
+| Hyperliquid | ${this.formatNumber(bestBidHyperliquid).padStart(12)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
+| Bybit       | ${this.formatNumber(bestAskBybit).padStart(12)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
 
 **2. VWAP Information:**
 ---------------------------------
 | Exchange    | VWAP Price (USDT) | Funding Rate (%) |
 |-------------|-------------------|-----------------|
-| Hyperliquid | ${this.formatNumber(VWAPHyperliquid).padStart(17)} | ${(fundingRateHyperliquid * 100).toFixed(4).padStart(16)} |
-| Bybit       | ${this.formatNumber(VWAPBybit).padStart(17)} | ${(fundingRateBybit * 100).toFixed(4).padStart(16)} |
+| Hyperliquid | ${this.formatNumber(VWAPHyperliquid).padStart(17)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
+| Bybit       | ${this.formatNumber(VWAPBybit).padStart(17)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
 
 **3. Calculated Spreads:**
 ---------------------------------
-- **Spread BBA (Best Bid Hyperliquid vs Ask Bybit):** ${this.formatNumber(spreadBidAsk1)} USDT (${spreadBidAsk1Percentage})
-- **Spread BBA (Best Bid Bybit vs Ask Hyperliquid):** ${this.formatNumber(spreadBidAsk2)} USDT (${spreadBidAsk2Percentage})
-- **Spread VWAP:** ${this.formatNumber(vwapSpread)} USDT
-- **Funding Rate Difference:** ${(fundingRateSpread * 100).toFixed(4)}%
+- **Spread BBA (Best Bid/Ask):** ${this.formatNumber(
+      spreadBBA
+    )} USDT (${spreadBBAPercentage})
+- **Spread VWAP:** ${this.formatNumber(vwapSpread)} USDT (${vwapSpreadPercentage})
+- **Funding Rate Difference:** ${this.formatNumber(
+      fundingRateSpread ? fundingRateSpread * 100 : null
+    )}%
 
 ---------------------------------
 `;

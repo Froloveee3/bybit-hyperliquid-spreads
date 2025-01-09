@@ -1,12 +1,12 @@
 import {
-  initializeHyperliquid,
-  getHyperliquidFundingRates,
-  getHyperliquidOrderBook,
-} from '../services/hyperliquidService';
+  hyperliquidWSrestart,
+  hyperliquidWSsubscribe,
+  hyperliquidWSunsubscribe,
+} from '../services/hyperliquidWS';
+
 import logger from '../logger';
-import { getOrderBookInfo, calculateVWAP } from '../utils/calculations';
 import { HyperliquidSymbol } from '../types/hyperliquidTypes';
-import cliProgress from 'cli-progress';
+import { getHyperliquidPerpetuals, initializeHyperliquid } from '../services/hyperliquidService';
 
 export class HyperliquidController {
   private symbols: Map<string, HyperliquidSymbol>;
@@ -16,103 +16,82 @@ export class HyperliquidController {
   }
 
   /**
-   * Получение данных по торговым парам с Hyperliquid
+   * Инициализация WebSocket и подписка на обновления по всем валютным парам.
    */
-  async fetchPairsData(): Promise<void> {
-    logger.info('Hyperliquid -> Начало обновления данных...');
+  async initializeWebSocketSubscriptions(): Promise<void> {
+    logger.info('hyperliquid -> Инициализация WebSocket и подписка на топики...');
 
     try {
-      await initializeHyperliquid();
+      hyperliquidWSrestart();
 
-      const { hyperliquidSymbols, hyperliquidFundingRates } =
-        await getHyperliquidFundingRates();
+      setTimeout(async () => {
+        await initializeHyperliquid();
+        const hyperliquidPerpetuals = await getHyperliquidPerpetuals();
 
-      for (const symbol of hyperliquidSymbols) {
-        const fundingRate = hyperliquidFundingRates[symbol] || 0;
+        const topics: { type: string; coin?: string; interval?: string }[] = [];
+        for (const symbol of hyperliquidPerpetuals) {
+          const keySymbol = symbol.split('-')[0] + 'USDT';
+          const formattedSymbol = symbol.split('-')[0];
 
-        this.symbols.set(symbol, {
-          symbol: symbol,
-          fundingRate,
-          bestBid: null,
-          bestAsk: null,
-          midPrice: null,
-          orderBook: null,
-          VWAP: null,
-        });
-      }
+          this.symbols.set(keySymbol, {
+            symbol: keySymbol,
+            fundingRate: null,
+            bestBid: null,
+            bestAsk: null,
+            midPrice: null,
+            orderBook: null,
+            VWAP: null,
+          });
 
-      await this.updateSymbolData();
-      logger.info('Hyperliquid -> Данные успешно обновлены!');
-    } catch (error) {
-      logger.error('Hyperliquid -> Ошибка при обновлении данных:', error);
+          topics.push({type: 'activeAssetCtx', coin: formattedSymbol});
+          topics.push({type: 'l2Book', coin: formattedSymbol});
+        }
+
+        hyperliquidWSsubscribe(topics);
+
+        logger.info('hyperliquid -> Подписка на все символы завершена.');
+      }, 2000);
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error
+          ? `${error.message}\n${error.stack}`
+          : `${error}`;
+      logger.error(
+        `hyperliquid -> Ошибка при подписке на WebSocket: ${errorMessage}`
+      );
+      throw new Error(
+        `hyperliquid -> Подписка на WebSocket не удалась: ${errorMessage}`
+      );
+    }
+  }
+
+  updateSymbolData(symbol: string, data: Partial<HyperliquidSymbol>): void {
+    const existingSymbol = this.symbols.get(symbol);
+
+    if (existingSymbol) {
+      this.symbols.set(symbol, { ...existingSymbol, ...data });
     }
   }
 
   /**
-   * Обновление ордербуков для всех торговых пар
+   * Отписка от топиков.
+   * @param symbol - Символ для отписки
    */
-  private async updateSymbolData(): Promise<void> {
-    try {
-      const symbols = Array.from(this.symbols.keys());
-
-      const progressBar = new cliProgress.SingleBar(
-        {
-          format:
-            'Hyperliquid -> Обновление ордербука | {bar} | {percentage}% | {value}/{total} пар',
-          barCompleteChar: '\u2588',
-          barIncompleteChar: '\u2591',
-          hideCursor: true,
-        },
-        cliProgress.Presets.shades_classic
-      );
-
-      progressBar.start(symbols.length, 0);
-
-      for (const [index, symbol] of symbols.entries()) {
-        try {
-          const orderBook = await getHyperliquidOrderBook(symbol);
-          const orderBookInfo = getOrderBookInfo(orderBook);
-          const VWAPInfo = calculateVWAP(orderBook);
-
-          if (!orderBookInfo || !VWAPInfo) continue;
-
-          const { bestBid, bestAsk, midPrice } = orderBookInfo;
-          const { VWAP } = VWAPInfo;
-
-          const updatedSymbol = this.symbols.get(symbol);
-          if (updatedSymbol) {
-            updatedSymbol.bestBid = bestBid;
-            updatedSymbol.bestAsk = bestAsk;
-            updatedSymbol.midPrice = midPrice;
-            updatedSymbol.orderBook = orderBook;
-            updatedSymbol.VWAP = VWAP;
-          }
-
-          progressBar.update(index + 1);
-        } catch (error) {
-          logger.error(
-            `Ошибка при обновлении книги ордеров для пары ${symbol}:`,
-            error
-          );
-        }
-      }
-
-      progressBar.stop();
-    } catch (error) {
-      logger.error('Ошибка при обновлении данных символов:', error);
-    }
+  unsubscribeSymbol(subscriptions: { type: string; coin?: string; interval?: string }[]): void {
+    hyperliquidWSunsubscribe(subscriptions);
+    logger.info(`hyperliquid -> Отписка от топиков: ${subscriptions}`);
   }
 
   /**
    * Получение всех символов
-   * @returns {HyperliquidSymbol[]}
+   * @returns Массив символов hyperliquid
    */
   getAllSymbols(): HyperliquidSymbol[] {
     return Array.from(this.symbols.values());
   }
 
   /**
-   * Получение данных символа по названию
+   * Получение данных по символу
    * @param symbol - Название торговой пары
    * @returns Данные по символу или undefined
    */
