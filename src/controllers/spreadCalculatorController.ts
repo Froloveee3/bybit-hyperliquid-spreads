@@ -116,20 +116,27 @@ export class SpreadCalculatorController {
     const spreadBBAPercentage =
       spreadBBA && bestBidHyperliquid
         ? `${this.formatNumber((spreadBBA / bestBidHyperliquid) * 100)}%`
-        : 'N/A';
+        : null;
 
     const fundingRateSpread =
       fundingRateBybit && fundingRateHyperliquid
         ? fundingRateBybit - fundingRateHyperliquid
         : null;
 
-    const vwapSpread =
+    const VWAPSpread =
       VWAPBybit && VWAPHyperliquid ? VWAPBybit - VWAPHyperliquid : null;
 
-    const vwapSpreadPercentage =
-      vwapSpread && VWAPHyperliquid
-        ? `${this.formatNumber((vwapSpread / VWAPHyperliquid) * 100)}%`
-        : 'N/A';
+    const VWAPSpreadPercentage =
+    VWAPSpread && VWAPHyperliquid
+        ? `${this.formatNumber((VWAPSpread / VWAPHyperliquid) * 100)}%`
+        : null;
+
+    if (
+      !bestBidHyperliquid || !bestAskBybit ||
+      !spreadBBA || !spreadBBAPercentage ||
+      !VWAPHyperliquid || !VWAPBybit || !VWAPSpread || !VWAPSpreadPercentage ||
+      !fundingRateHyperliquid || !fundingRateBybit || !fundingRateSpread
+    ) return;
 
     const report = this.generateSpreadReport(
       symbol,
@@ -139,8 +146,10 @@ export class SpreadCalculatorController {
       spreadBBAPercentage,
       VWAPHyperliquid,
       VWAPBybit,
-      vwapSpread,
-      vwapSpreadPercentage,
+      VWAPSpread,
+      VWAPSpreadPercentage,
+      fundingRateHyperliquid,
+      fundingRateBybit,
       fundingRateSpread
     );
 
@@ -169,15 +178,17 @@ export class SpreadCalculatorController {
    */
   private generateSpreadReport(
     symbol: string,
-    bestBidHyperliquid: number | null,
-    bestAskBybit: number | null,
-    spreadBBA: number | null,
+    bestBidHyperliquid: number,
+    bestAskBybit: number,
+    spreadBBA: number,
     spreadBBAPercentage: string,
-    VWAPHyperliquid: number | null,
-    VWAPBybit: number | null,
-    vwapSpread: number | null,
-    vwapSpreadPercentage: string,
-    fundingRateSpread: number | null
+    VWAPHyperliquid: number,
+    VWAPBybit: number,
+    VWAPSpread: number,
+    VWAPSpreadPercentage: string,
+    fundingRateHyperliquid: number,
+    fundingRateBybit: number,
+    fundingRateSpread: number
   ): string {
     return `
 === ${symbol} Market Data ===
@@ -186,25 +197,23 @@ export class SpreadCalculatorController {
 ---------------------------------
 | Exchange    | Price (USDT) | Funding Rate (%) |
 |-------------|--------------|-----------------|
-| Hyperliquid | ${this.formatNumber(bestBidHyperliquid).padStart(12)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
-| Bybit       | ${this.formatNumber(bestAskBybit).padStart(12)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
+| Hyperliquid | ${this.formatNumber(bestBidHyperliquid).padStart(12)} | ${(fundingRateHyperliquid * 100).toFixed(4).padStart(16)} |
+| Bybit       | ${this.formatNumber(bestAskBybit).padStart(12)} | ${(fundingRateBybit * 100).toFixed(4).padStart(16)} |
 
 **2. VWAP Information:**
 ---------------------------------
 | Exchange    | VWAP Price (USDT) | Funding Rate (%) |
 |-------------|-------------------|-----------------|
-| Hyperliquid | ${this.formatNumber(VWAPHyperliquid).padStart(17)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
-| Bybit       | ${this.formatNumber(VWAPBybit).padStart(17)} | ${(fundingRateSpread ? fundingRateSpread * 100 : 0).toFixed(4).padStart(16)} |
+| Hyperliquid | ${this.formatNumber(VWAPHyperliquid).padStart(17)} | ${(fundingRateHyperliquid * 100).toFixed(4).padStart(16)} |
+| Bybit       | ${this.formatNumber(VWAPBybit).padStart(17)} | ${(fundingRateBybit * 100).toFixed(4).padStart(16)} |
 
 **3. Calculated Spreads:**
 ---------------------------------
 - **Spread BBA (Best Bid/Ask):** ${this.formatNumber(
       spreadBBA
     )} USDT (${spreadBBAPercentage})
-- **Spread VWAP:** ${this.formatNumber(vwapSpread)} USDT (${vwapSpreadPercentage})
-- **Funding Rate Difference:** ${this.formatNumber(
-      fundingRateSpread ? fundingRateSpread * 100 : null
-    )}%
+- **Spread VWAP:** ${this.formatNumber(VWAPSpread)} USDT (${VWAPSpreadPercentage})
+- **Funding Rate Difference:** ${this.formatNumber(fundingRateSpread * 100)}%
 
 ---------------------------------
 `;
